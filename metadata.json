@@ -1,0 +1,7 @@
+{
+  "name": "RideLink",
+  "description": "A real-time chat application connecting drivers and passengers. Passengers can broadcast ride requests, and verified drivers can bid on them. Once a bid is accepted, a private chat is initiated for coordination. All payments are handled directly between the user and driver.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
