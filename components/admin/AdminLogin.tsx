@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheckIcon } from '../../constants';
 import Button from '../shared/Button';
 import Spinner from '../shared/Spinner';
-import { ADMIN_EMAIL, handleSignOut } from '../../services/firebaseService';
+import { ADMIN_EMAIL, handleSignOut, createUserProfile } from '../../services/firebaseService';
+import { UserRole } from '../../types';
 import { auth } from '../../firebase';
 import { 
     sendSignInLinkToEmail,
@@ -31,19 +32,27 @@ const AdminLogin: React.FC = () => {
                 setIsLoading(true);
                 try {
                     const result = await signInWithEmailLink(auth, storedEmail, window.location.href);
+
+                    // FIX: Create/update the user profile in Firestore to prevent "profile not found" error.
+                    // This is essential for the AppContext to find the user data.
+                    await createUserProfile(result.user, UserRole.ADMIN);
                     
                     if (result.user.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
                         await handleSignOut();
-                        setError("Access denied. This Google account is not authorized for admin access.");
+                        setError("Access denied. This account is not authorized for admin access.");
                     }
                     
                     window.localStorage.removeItem('emailForSignIn');
                 } catch (err) {
-                    console.error("Sign in with email link error:", err);
-                    setError("Failed to sign in. The link may have expired or been used already.");
+                    const firebaseError = err as { code?: string };
+                    if (firebaseError.code === 'auth/invalid-action-code') {
+                        setError("The sign-in link is invalid. It may have expired or been used already. Please request a new one.");
+                    } else {
+                        console.error("Sign in with email link error:", err);
+                        setError("An unexpected error occurred during sign-in. Please try again.");
+                    }
                 } finally {
                     setIsLoading(false);
-                    // Set verifying to false even on success, in case of post-login errors.
                     setIsVerifying(false);
                 }
             } else {

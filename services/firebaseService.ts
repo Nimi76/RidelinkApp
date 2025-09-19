@@ -62,20 +62,30 @@ export const uploadFile = async (file: File, path: string): Promise<string> => {
 
 export const createUserProfile = async (firebaseUser: FirebaseUser, role: UserRole): Promise<void> => {
     const userRef = doc(db, "users", firebaseUser.uid);
+    const isUserAdmin = firebaseUser.email === ADMIN_EMAIL;
+    // If the user is an admin, their role should always be ADMIN.
+    const actualRole = isUserAdmin ? UserRole.ADMIN : role;
+
+    // Firebase User objects from email link may not have displayName or photoURL.
+    // We get the existing doc to preserve the name/avatar if they already exist.
     const userSnap = await getDoc(userRef);
+    const existingData = userSnap.exists() ? userSnap.data() : {};
 
-    if (!userSnap.exists()) {
-        const isUserAdmin = firebaseUser.email === ADMIN_EMAIL;
-        const actualRole = isUserAdmin ? UserRole.ADMIN : role;
+    const userData = {
+        name: firebaseUser.displayName || existingData.name || 'Anonymous Admin',
+        email: firebaseUser.email || '',
+        avatarUrl: firebaseUser.photoURL || existingData.avatarUrl || `https://ui-avatars.com/api/?name=${(firebaseUser.displayName || 'Admin').replace(' ','+')}&background=0ea5e9&color=fff`,
+        role: actualRole,
+        isVerified: isUserAdmin, // Admins are always verified
+    };
 
-        const newUser: Omit<User, 'id'> = {
-            name: firebaseUser.displayName || 'Anonymous',
-            email: firebaseUser.email || '',
-            avatarUrl: firebaseUser.photoURL || `https://ui-avatars.com/api/?name=${firebaseUser.displayName?.replace(' ','+')}&background=0ea5e9&color=fff`,
-            role: actualRole,
-            isVerified: isUserAdmin, // Admins are auto-verified
-        };
-        await setDoc(userRef, newUser);
+    // Use setDoc with merge to create or update. This is crucial.
+    // It prevents overwriting fields like carDetails if an admin was previously a driver
+    // and ensures the role is updated to ADMIN.
+    await setDoc(userRef, userData, { merge: true });
+
+    // Log sign_up event only for non-admin new users
+    if (!userSnap.exists() && !isUserAdmin) {
         logEvent(analytics, 'sign_up', { method: 'google', role: actualRole });
     }
 };
