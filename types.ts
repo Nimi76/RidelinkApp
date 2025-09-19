@@ -21,6 +21,7 @@ export interface User {
   role: UserRole;
   isVerified: boolean;
   carDetails?: CarDetails;
+  licenseUrl?: string;
 }
 
 export interface RideRequest {

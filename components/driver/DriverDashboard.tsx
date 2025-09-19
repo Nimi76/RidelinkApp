@@ -1,59 +1,51 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
-import { RideRequest, Bid, CarDetails } from '../../types';
+import { RideRequest, Bid, CarDetails, User } from '../../types';
 import Button from '../shared/Button';
 import ChatView from '../shared/ChatView';
 import Spinner from '../shared/Spinner';
-import { CheckBadgeIcon, LocationMarkerIcon, CarIcon } from '../../constants';
+import { CheckBadgeIcon, LocationMarkerIcon, CarIcon, ShieldCheckIcon } from '../../constants';
 import { 
-    setDriverVerified, 
     listenForAvailableRequests, 
     addBidToRequest,
     getAcceptedRideForDriver,
-    updateDriverProfile
+    updateDriverProfile,
+    uploadFile
 } from '../../services/firebaseService';
 
-const Verification: React.FC = () => {
-    const { state } = useAppContext();
-    const [isVerifying, setIsVerifying] = useState(false);
+const PendingVerification: React.FC = () => (
+    <div className="max-w-md mx-auto text-center bg-slate-800 p-8 rounded-lg shadow-lg">
+        <ShieldCheckIcon className="w-16 h-16 mx-auto text-yellow-400" />
+        <h2 className="text-2xl font-bold mt-4">Profile Submitted for Review</h2>
+        <p className="text-slate-400 mt-2">
+            Thank you for submitting your details. Your profile is currently under review by our admin team.
+            You will be able to accept rides once your account is verified.
+        </p>
+    </div>
+);
 
-    const handleVerification = async () => {
-        if (!state.user?.id) return;
-        setIsVerifying(true);
-        try {
-            await setDriverVerified(state.user.id);
-            // The AppContext listener will handle the state update
-        } catch (error) {
-            console.error("Verification failed:", error);
-        } finally {
-            setIsVerifying(false);
-        }
-    };
-
-    return (
-        <div className="max-w-md mx-auto text-center bg-slate-800 p-8 rounded-lg shadow-lg">
-            <CheckBadgeIcon className="w-16 h-16 mx-auto text-sky-400" />
-            <h2 className="text-2xl font-bold mt-4">Become a Verified Driver</h2>
-            <p className="text-slate-400 mt-2">Complete a quick check to start accepting rides and earning.</p>
-            <div className="mt-6">
-                {isVerifying ? (
-                    <div className="flex items-center justify-center space-x-2">
-                        <Spinner />
-                        <span>Verifying your details...</span>
-                    </div>
-                ) : (
-                    <Button onClick={handleVerification} className="w-full">Start Verification</Button>
-                )}
-            </div>
-        </div>
-    );
-};
-
-const DriverProfileSetup: React.FC = () => {
-    const { state } = useAppContext();
+const DriverProfileSetup: React.FC<{ user: User }> = ({ user }) => {
     const [carDetails, setCarDetails] = useState<CarDetails>({ make: '', model: '', color: '', licensePlate: '' });
+    const [photoFile, setPhotoFile] = useState<File | null>(null);
+    const [licenseFile, setLicenseFile] = useState<File | null>(null);
+    const [photoPreview, setPhotoPreview] = useState<string | null>(user.avatarUrl);
+    const [licensePreview, setLicensePreview] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState('');
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'photo' | 'license') => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const previewUrl = URL.createObjectURL(file);
+            if (type === 'photo') {
+                setPhotoFile(file);
+                setPhotoPreview(previewUrl);
+            } else {
+                setLicenseFile(file);
+                setLicensePreview(previewUrl);
+            }
+        }
+    };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setCarDetails({ ...carDetails, [e.target.name]: e.target.value });
@@ -61,32 +53,69 @@ const DriverProfileSetup: React.FC = () => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!state.user?.id) return;
+        if (!user.id) return;
         
-        if (!carDetails.make || !carDetails.model || !carDetails.color || !carDetails.licensePlate) {
-            setError('All fields are required.');
+        const allFieldsFilled = Object.values(carDetails).every(field => field.trim() !== '');
+        if (!allFieldsFilled || !photoFile || !licenseFile) {
+            setError('All fields, including photo and license, are required.');
             return;
         }
+
         setIsSubmitting(true);
         setError('');
         try {
-            await updateDriverProfile(state.user.id, carDetails);
+            const photoUrl = await uploadFile(photoFile, `drivers/${user.id}/photo.jpg`);
+            const licenseUrl = await uploadFile(licenseFile, `drivers/${user.id}/license.jpg`);
+            
+            await updateDriverProfile(user.id, {
+                carDetails,
+                avatarUrl: photoUrl,
+                licenseUrl,
+            });
             // AppContext listener will update the user state automatically, transitioning the view
         } catch (err) {
             console.error("Failed to update profile:", err);
             setError('Could not save details. Please try again.');
+        } finally {
             setIsSubmitting(false);
         }
     };
+    
+    useEffect(() => {
+        // Cleanup object URLs on component unmount
+        return () => {
+            if (photoPreview && photoPreview.startsWith('blob:')) URL.revokeObjectURL(photoPreview);
+            if (licensePreview) URL.revokeObjectURL(licensePreview);
+        };
+    }, [photoPreview, licensePreview]);
+
+    const FileInput: React.FC<{id: string, label: string, onChange: (e: React.ChangeEvent<HTMLInputElement>) => void, preview: string | null, required: boolean}> = ({ id, label, onChange, preview, required}) => (
+         <div>
+            <label htmlFor={id} className="block text-sm font-medium text-slate-300 mb-2">{label}</label>
+            <div className="flex items-center space-x-4">
+                {preview ? (
+                    <img src={preview} alt="Preview" className="w-16 h-16 rounded-md object-cover" />
+                ) : (
+                    <div className="w-16 h-16 rounded-md bg-slate-700 flex items-center justify-center text-slate-500 text-xs">No file</div>
+                )}
+                <input id={id} name={id} type="file" accept="image/*" onChange={onChange} required={required} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100"/>
+            </div>
+        </div>
+    );
 
     return (
         <div className="max-w-md mx-auto bg-slate-800 p-8 rounded-lg shadow-lg">
              <div className="text-center">
                 <CarIcon className="w-16 h-16 mx-auto text-sky-400" />
                 <h2 className="text-2xl font-bold mt-4">Complete Your Driver Profile</h2>
-                <p className="text-slate-400 mt-2">Add your vehicle details so passengers can identify you.</p>
+                <p className="text-slate-400 mt-2">Add your vehicle details and documents for verification.</p>
             </div>
-            <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+            <form onSubmit={handleSubmit} className="mt-8 space-y-6">
+                <FileInput id="photo" label="Profile Photo" onChange={(e) => handleFileChange(e, 'photo')} preview={photoPreview} required />
+                <FileInput id="license" label="Driver's License Scan" onChange={(e) => handleFileChange(e, 'license')} preview={licensePreview} required />
+
+                <hr className="border-slate-600"/>
+
                 <div>
                     <label htmlFor="make" className="block text-sm font-medium text-slate-300 mb-1">Car Make</label>
                     <input id="make" name="make" type="text" value={carDetails.make} onChange={handleChange} placeholder="e.g., Toyota" required className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:ring-sky-500 focus:border-sky-500"/>
@@ -104,10 +133,10 @@ const DriverProfileSetup: React.FC = () => {
                     <input id="licensePlate" name="licensePlate" type="text" value={carDetails.licensePlate} onChange={handleChange} placeholder="e.g., ABC-123" required className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:ring-sky-500 focus:border-sky-500"/>
                 </div>
 
-                {error && <p className="text-red-400 text-sm">{error}</p>}
+                {error && <p className="text-red-400 text-sm text-center">{error}</p>}
 
                 <Button type="submit" className="w-full" disabled={isSubmitting}>
-                    {isSubmitting ? <Spinner /> : 'Save and Continue'}
+                    {isSubmitting ? <Spinner /> : 'Submit for Verification'}
                 </Button>
             </form>
         </div>
@@ -231,12 +260,13 @@ const DriverDashboard: React.FC = () => {
     
     if (!user) return null;
     
-    if (!user.isVerified) {
-        return <Verification />;
+    // Flow: 1. Complete profile -> 2. Wait for verification -> 3. See dashboard
+    if (!user.carDetails || !user.licenseUrl) {
+        return <DriverProfileSetup user={user} />;
     }
 
-    if (!user.carDetails) {
-        return <DriverProfileSetup />;
+    if (!user.isVerified) {
+        return <PendingVerification />;
     }
 
     if (myAcceptedRide) {

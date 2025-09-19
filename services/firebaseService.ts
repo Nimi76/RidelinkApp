@@ -19,8 +19,13 @@ import {
     limit,
     deleteDoc,
 } from "firebase/firestore";
+import { 
+    ref,
+    uploadBytes,
+    getDownloadURL
+} from 'firebase/storage';
 import { logEvent } from "firebase/analytics";
-import { auth, db, analytics } from '../firebase';
+import { auth, db, analytics, storage } from '../firebase';
 import { User, UserRole, RideRequest, Bid, Message, CarDetails } from '../types';
 
 const provider = new GoogleAuthProvider();
@@ -34,12 +39,35 @@ export const ADMIN_EMAIL = 'basoeneoruye@gmail.com';
 export const handleGoogleSignIn = async (role: UserRole): Promise<void> => {
     const result = await signInWithPopup(auth, provider);
     const user = result.user;
+    if (user.email === ADMIN_EMAIL) {
+        await handleSignOut();
+        throw new Error("Admin accounts must use the /admin login page.");
+    }
     await createUserProfile(user, role);
     logEvent(analytics, 'login', { method: 'google', role });
 };
 
+export const handleAdminGoogleSignIn = async (): Promise<void> => {
+    const result = await signInWithPopup(auth, provider);
+    const user = result.user;
+    if (user.email !== ADMIN_EMAIL) {
+        await handleSignOut();
+        throw new Error("Access denied. This Google account is not authorized for admin access.");
+    }
+    // Let the existing createUserProfile handle profile creation/verification
+    await createUserProfile(user, UserRole.ADMIN);
+    logEvent(analytics, 'login', { method: 'google', role: 'ADMIN' });
+};
+
 export const handleSignOut = (): Promise<void> => {
     return signOut(auth);
+};
+
+// --- File Management ---
+export const uploadFile = async (file: File, path: string): Promise<string> => {
+    const storageRef = ref(storage, path);
+    const snapshot = await uploadBytes(storageRef, file);
+    return await getDownloadURL(snapshot.ref);
 };
 
 // --- User Profile Management ---
@@ -55,9 +83,9 @@ export const createUserProfile = async (firebaseUser: FirebaseUser, role: UserRo
         const newUser: Omit<User, 'id'> = {
             name: firebaseUser.displayName || 'Anonymous',
             email: firebaseUser.email || '',
-            avatarUrl: firebaseUser.photoURL || `https://picsum.photos/seed/${firebaseUser.uid}/100/100`,
+            avatarUrl: firebaseUser.photoURL || `https://ui-avatars.com/api/?name=${firebaseUser.displayName?.replace(' ','+')}&background=0ea5e9&color=fff`,
             role: actualRole,
-            isVerified: false,
+            isVerified: isUserAdmin, // Admins are auto-verified
         };
         await setDoc(userRef, newUser);
         logEvent(analytics, 'sign_up', { method: 'google', role: actualRole });
@@ -79,14 +107,9 @@ export const updateDriverVerification = (uid: string, isVerified: boolean): Prom
     return updateDoc(userRef, { isVerified });
 };
 
-export const setDriverVerified = (uid: string): Promise<void> => {
-    logEvent(analytics, 'driver_self_verified', { driver_id: uid });
-    return updateDriverVerification(uid, true);
-};
-
-export const updateDriverProfile = (uid: string, carDetails: CarDetails): Promise<void> => {
+export const updateDriverProfile = (uid: string, data: { carDetails: CarDetails, avatarUrl: string, licenseUrl: string }): Promise<void> => {
     const userRef = doc(db, "users", uid);
-    return updateDoc(userRef, { carDetails });
+    return updateDoc(userRef, data);
 };
 
 

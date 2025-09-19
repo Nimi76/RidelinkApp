@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
 import { UserRole } from '../../types';
 import { CarIcon, UserIcon } from '../../constants';
@@ -7,14 +7,18 @@ import { handleGoogleSignIn } from '../../services/firebaseService';
 
 const Login: React.FC = () => {
   const { dispatch } = useAppContext();
+  const [error, setError] = useState('');
 
   const handleLogin = async (role: UserRole) => {
+    setError('');
     try {
         await handleGoogleSignIn(role);
         // The AppContext observer will handle setting the user state
-    } catch (error) {
-        console.error("Login failed:", error);
-        dispatch({ type: 'SET_ERROR', payload: 'Failed to sign in. Please try again.'});
+    } catch (err) {
+        console.error("Login failed:", err);
+        const message = err instanceof Error ? err.message : 'Failed to sign in. Please try again.';
+        setError(message);
+        dispatch({ type: 'SET_ERROR', payload: message});
     }
   };
 
@@ -25,6 +29,11 @@ const Login: React.FC = () => {
           <h1 className="text-4xl font-bold text-sky-400">Welcome to RideLink</h1>
           <p className="mt-2 text-slate-400">Your real-time ride-hailing connection.</p>
         </div>
+        {error && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3 text-center">
+                {error}
+            </div>
+        )}
         <div className="flex flex-col space-y-4">
           <Button
             onClick={() => handleLogin(UserRole.PASSENGER)}
