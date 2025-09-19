@@ -47,18 +47,6 @@ export const handleGoogleSignIn = async (role: UserRole): Promise<void> => {
     logEvent(analytics, 'login', { method: 'google', role });
 };
 
-export const handleAdminGoogleSignIn = async (): Promise<void> => {
-    const result = await signInWithPopup(auth, provider);
-    const user = result.user;
-    if (user.email !== ADMIN_EMAIL) {
-        await handleSignOut();
-        throw new Error("Access denied. This Google account is not authorized for admin access.");
-    }
-    // Let the existing createUserProfile handle profile creation/verification
-    await createUserProfile(user, UserRole.ADMIN);
-    logEvent(analytics, 'login', { method: 'google', role: 'ADMIN' });
-};
-
 export const handleSignOut = (): Promise<void> => {
     return signOut(auth);
 };
