@@ -24,6 +24,21 @@ const PendingVerification: React.FC = () => (
     </div>
 );
 
+// Moved outside DriverProfileSetup for better performance and to prevent re-declaration on every render.
+const FileInput: React.FC<{id: string, label: string, onChange: (e: React.ChangeEvent<HTMLInputElement>) => void, preview: string | null}> = ({ id, label, onChange, preview }) => (
+     <div>
+        <label htmlFor={id} className="block text-sm font-medium text-slate-300 mb-2">{label}</label>
+        <div className="flex items-center space-x-4">
+            {preview ? (
+                <img src={preview} alt="Preview" className="w-16 h-16 rounded-md object-cover" />
+            ) : (
+                <div className="w-16 h-16 rounded-md bg-slate-700 flex items-center justify-center text-slate-500 text-xs">No file</div>
+            )}
+            <input id={id} name={id} type="file" accept="image/*" onChange={onChange} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100"/>
+        </div>
+    </div>
+);
+
 const DriverProfileSetup: React.FC<{ user: User }> = ({ user }) => {
     const [carDetails, setCarDetails] = useState<CarDetails>({ make: '', model: '', color: '', licensePlate: '' });
     const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -56,16 +71,23 @@ const DriverProfileSetup: React.FC<{ user: User }> = ({ user }) => {
         if (!user.id) return;
         
         const allFieldsFilled = Object.values(carDetails).every(field => field.trim() !== '');
-        if (!allFieldsFilled || !photoFile || !licenseFile) {
-            setError('All fields, including photo and license, are required.');
+        
+        // FIX: License is always required. Photo is only required if one doesn't already exist from Google Sign-In.
+        if (!allFieldsFilled || (!photoFile && !user.avatarUrl) || !licenseFile) {
+            setError("All fields, including a profile photo and driver's license, are required.");
             return;
         }
 
         setIsSubmitting(true);
         setError('');
         try {
-            const photoUrl = await uploadFile(photoFile, `drivers/${user.id}/photo.jpg`);
-            const licenseUrl = await uploadFile(licenseFile, `drivers/${user.id}/license.jpg`);
+            // FIX: Only upload a new photo if one was provided, otherwise use the existing one.
+            const photoUrl = photoFile 
+                ? await uploadFile(photoFile, `drivers/${user.id}/photo.jpg`) 
+                : user.avatarUrl;
+
+            // The license file is guaranteed to exist by the check above, so we can use the non-null assertion `!`.
+            const licenseUrl = await uploadFile(licenseFile!, `drivers/${user.id}/license.jpg`);
             
             await updateDriverProfile(user.id, {
                 carDetails,
@@ -89,20 +111,6 @@ const DriverProfileSetup: React.FC<{ user: User }> = ({ user }) => {
         };
     }, [photoPreview, licensePreview]);
 
-    const FileInput: React.FC<{id: string, label: string, onChange: (e: React.ChangeEvent<HTMLInputElement>) => void, preview: string | null, required: boolean}> = ({ id, label, onChange, preview, required}) => (
-         <div>
-            <label htmlFor={id} className="block text-sm font-medium text-slate-300 mb-2">{label}</label>
-            <div className="flex items-center space-x-4">
-                {preview ? (
-                    <img src={preview} alt="Preview" className="w-16 h-16 rounded-md object-cover" />
-                ) : (
-                    <div className="w-16 h-16 rounded-md bg-slate-700 flex items-center justify-center text-slate-500 text-xs">No file</div>
-                )}
-                <input id={id} name={id} type="file" accept="image/*" onChange={onChange} required={required} className="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-700 hover:file:bg-sky-100"/>
-            </div>
-        </div>
-    );
-
     return (
         <div className="max-w-md mx-auto bg-slate-800 p-8 rounded-lg shadow-lg">
              <div className="text-center">
@@ -111,8 +119,8 @@ const DriverProfileSetup: React.FC<{ user: User }> = ({ user }) => {
                 <p className="text-slate-400 mt-2">Add your vehicle details and documents for verification.</p>
             </div>
             <form onSubmit={handleSubmit} className="mt-8 space-y-6">
-                <FileInput id="photo" label="Profile Photo" onChange={(e) => handleFileChange(e, 'photo')} preview={photoPreview} required />
-                <FileInput id="license" label="Driver's License Scan" onChange={(e) => handleFileChange(e, 'license')} preview={licensePreview} required />
+                <FileInput id="photo" label="Profile Photo" onChange={(e) => handleFileChange(e, 'photo')} preview={photoPreview} />
+                <FileInput id="license" label="Driver's License Scan" onChange={(e) => handleFileChange(e, 'license')} preview={licensePreview} />
 
                 <hr className="border-slate-600"/>
 
