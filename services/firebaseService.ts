@@ -26,7 +26,7 @@ import { User, UserRole, RideRequest, Bid, Message, CarDetails } from '../types'
 const provider = new GoogleAuthProvider();
 
 // IMPORTANT: Replace this with the email you want to use for administration.
-export const ADMIN_EMAIL = 'boruye@gmail.com';
+export const ADMIN_EMAIL = 'basoeneoruye@gmail.com';
 
 
 // --- Authentication ---
