@@ -49,3 +49,9 @@ export interface Message {
   text: string;
   timestamp: FieldValue;
 }
+
+export interface FareConfig {
+  baseFare: number;
+  ratePerKm: number;
+  ratePerMinute: number;
+}

@@ -26,7 +26,7 @@ import {
 } from 'firebase/storage';
 import { logEvent } from "firebase/analytics";
 import { auth, db, analytics, storage } from '../firebase';
-import { User, UserRole, RideRequest, Bid, Message, CarDetails } from '../types';
+import { User, UserRole, RideRequest, Bid, Message, CarDetails, FareConfig } from '../types';
 
 const provider = new GoogleAuthProvider();
 
@@ -272,6 +272,29 @@ export const listenForMessages = (requestId: string, callback: (messages: Messag
         callback(messages);
     });
 };
+
+
+// --- App Settings ---
+
+export const listenForFareConfig = (callback: (config: FareConfig | null) => void) => {
+    const configRef = doc(db, "settings", "fareConfig");
+    return onSnapshot(configRef, (docSnap) => {
+        if (docSnap.exists()) {
+            callback(docSnap.data() as FareConfig);
+        } else {
+            // If config is not set in Firestore, return null so the app can handle it
+            callback(null);
+        }
+    });
+};
+
+export const updateFareConfig = (config: Partial<FareConfig>): Promise<void> => {
+    const configRef = doc(db, "settings", "fareConfig");
+    logEvent(analytics, 'fare_config_updated', { admin_action: true });
+    // Use setDoc with merge to create or update, preventing accidental deletion of fields
+    return setDoc(configRef, config, { merge: true });
+};
+
 
 // --- Admin Functions ---
 

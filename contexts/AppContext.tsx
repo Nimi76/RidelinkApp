@@ -1,14 +1,16 @@
 import React, { createContext, useReducer, Dispatch, useEffect } from 'react';
-import { User } from '../types';
+import { User, FareConfig } from '../types';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { listenForFareConfig } from '../services/firebaseService';
 
 
 interface AppState {
   user: User | null;
   isLoading: boolean;
   error: string | null;
+  fareConfig: FareConfig | null;
 }
 
 type Action =
@@ -16,13 +18,15 @@ type Action =
   | { type: 'SET_USER'; payload: User | null }
   | { type: 'SET_VERIFIED' }
   | { type: 'LOGOUT' }
-  | { type: 'SET_ERROR'; payload: string | null };
+  | { type: 'SET_ERROR'; payload: string | null }
+  | { type: 'SET_FARE_CONFIG'; payload: FareConfig | null };
 
 
 const initialState: AppState = {
   user: null,
   isLoading: true,
   error: null,
+  fareConfig: null,
 };
 
 
@@ -41,6 +45,8 @@ const appReducer = (state: AppState, action: Action): AppState => {
       return state;
     case 'SET_ERROR':
         return { ...state, error: action.payload, isLoading: false };
+    case 'SET_FARE_CONFIG':
+      return { ...state, fareConfig: action.payload };
     default:
       return state;
   }
@@ -90,9 +96,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     });
 
+    const unsubscribeFareConfig = listenForFareConfig((config) => {
+        dispatch({ type: 'SET_FARE_CONFIG', payload: config });
+    });
+
+
     return () => {
         unsubscribeAuth();
         unsubscribeProfile();
+        unsubscribeFareConfig();
     };
   }, []);
 

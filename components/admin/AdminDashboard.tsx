@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { User, RideRequest, UserRole } from '../../types';
+import { User, RideRequest, UserRole, FareConfig } from '../../types';
 import { 
     listenForAllUsers, 
     listenForAllRideRequests,
-    updateDriverVerification
+    updateDriverVerification,
+    listenForFareConfig,
+    updateFareConfig
 } from '../../services/firebaseService';
 import Spinner from '../shared/Spinner';
 import Button from '../shared/Button';
@@ -71,6 +73,95 @@ const UserDetailsModal: React.FC<{ user: User; onClose: () => void; onVerify: (u
     </div>
 );
 
+const FareSettings: React.FC = () => {
+    const [config, setConfig] = useState<Partial<FareConfig>>({ baseFare: undefined, ratePerKm: undefined, ratePerMinute: undefined });
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
+    const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
+
+    useEffect(() => {
+        const unsubscribe = listenForFareConfig(fareConfig => {
+            if (fareConfig) {
+                setConfig(fareConfig);
+            }
+            setIsLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { name, value } = e.target;
+        setConfig(prev => ({ ...prev, [name]: value === '' ? undefined : Number(value) }));
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+
+        if (config.baseFare === undefined || config.ratePerKm === undefined || config.ratePerMinute === undefined) {
+            setError('All fields must be filled with valid numbers.');
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            await updateFareConfig({
+                baseFare: Number(config.baseFare),
+                ratePerKm: Number(config.ratePerKm),
+                ratePerMinute: Number(config.ratePerMinute),
+            });
+            setSuccess('Settings updated successfully!');
+            setTimeout(() => setSuccess(''), 3000); // Clear after 3s
+        } catch (err) {
+            console.error(err);
+            setError('Failed to update settings. Please try again.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    if (isLoading) {
+        return (
+            <div className="bg-slate-800/50 rounded-lg shadow-lg p-4 text-center">
+                <Spinner />
+            </div>
+        );
+    }
+    
+    return (
+        <div className="bg-slate-800/50 rounded-lg shadow-lg">
+            <h2 className="text-xl font-bold p-4 border-b border-slate-700">Fare Calculation Settings</h2>
+            <form onSubmit={handleSubmit} className="p-4 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label htmlFor="baseFare" className="block text-sm font-medium text-slate-300 mb-1">Base Fare (₦)</label>
+                        <input type="number" name="baseFare" id="baseFare" value={config.baseFare ?? ''} onChange={handleChange} placeholder="e.g., 500" className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:ring-sky-500 focus:border-sky-500" />
+                    </div>
+                    <div>
+                        <label htmlFor="ratePerKm" className="block text-sm font-medium text-slate-300 mb-1">Rate per KM (₦)</label>
+                        <input type="number" name="ratePerKm" id="ratePerKm" value={config.ratePerKm ?? ''} onChange={handleChange} placeholder="e.g., 150" className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:ring-sky-500 focus:border-sky-500" />
+                    </div>
+                    <div>
+                        <label htmlFor="ratePerMinute" className="block text-sm font-medium text-slate-300 mb-1">Rate per Minute (₦)</label>
+                        <input type="number" name="ratePerMinute" id="ratePerMinute" value={config.ratePerMinute ?? ''} onChange={handleChange} placeholder="e.g., 50" className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:ring-sky-500 focus:border-sky-500" />
+                    </div>
+                </div>
+
+                {error && <p className="text-red-400 text-sm">{error}</p>}
+                {success && <p className="text-emerald-400 text-sm">{success}</p>}
+                
+                <div className="flex justify-end">
+                    <Button type="submit" disabled={isSaving} className="bg-emerald-600 hover:bg-emerald-700">
+                        {isSaving ? <Spinner /> : 'Save Settings'}
+                    </Button>
+                </div>
+            </form>
+        </div>
+    );
+};
+
 
 const AdminDashboard: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
@@ -123,6 +214,8 @@ const AdminDashboard: React.FC = () => {
                 <StatCard title="Verified Drivers" value={verifiedDriversCount} icon={<ShieldCheckIcon className="w-6 h-6 text-emerald-400"/>} />
                 <StatCard title="Active Ride Requests" value={activeRequestsCount} icon={<CarIcon className="w-6 h-6 text-yellow-400"/>} />
             </div>
+
+            <FareSettings />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
                 {/* User Management */}

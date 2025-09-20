@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
-import { RideRequest, Bid } from '../../types';
+import { RideRequest, Bid, FareConfig } from '../../types';
 import Button from '../shared/Button';
 import ChatView from '../shared/ChatView';
 import { LocationMarkerIcon, CheckBadgeIcon } from '../../constants';
@@ -12,12 +12,92 @@ import {
     acceptBid,
     cancelRideRequest 
 } from '../../services/firebaseService';
+import { getRideEstimate } from '../../services/api';
 
-const RideRequestForm: React.FC<{ onSubmit: (location: string, destination: string) => void; isSubmitting: boolean }> = ({ onSubmit, isSubmitting }) => {
+const FareEstimate: React.FC<{
+    isCalculating: boolean;
+    error: string;
+    fare: number | null;
+}> = ({ isCalculating, error, fare }) => {
+    // Hide if nothing is happening and there's no result
+    if (!isCalculating && !error && fare === null) {
+        return null;
+    }
+
+    return (
+        <div className="mt-4 p-4 bg-slate-700/50 rounded-lg text-center transition-all duration-300">
+            {isCalculating && (
+                <div className="flex items-center justify-center space-x-2 text-slate-400">
+                    <Spinner className="w-4 h-4" />
+                    <span>Calculating estimated fare...</span>
+                </div>
+            )}
+            {error && !isCalculating && (
+                <p className="text-yellow-400 text-sm">{error}</p>
+            )}
+            {fare !== null && !isCalculating && !error && (
+                <div>
+                    <p className="text-sm text-slate-400">Estimated Fare</p>
+                    <p className="text-2xl font-bold text-emerald-400">~₦{fare.toLocaleString()}</p>
+                    <p className="text-xs text-slate-500 mt-1">This is an estimate. Drivers will bid with their final price.</p>
+                </div>
+            )}
+        </div>
+    );
+};
+
+
+const RideRequestForm: React.FC<{ 
+    onSubmit: (location: string, destination: string) => void; 
+    isSubmitting: boolean;
+    fareConfig: FareConfig | null;
+}> = ({ onSubmit, isSubmitting, fareConfig }) => {
     const [location, setLocation] = useState('');
     const [destination, setDestination] = useState('');
     const [locationLoading, setLocationLoading] = useState(false);
     const [locationError, setLocationError] = useState('');
+
+    // New state for fare estimation
+    const [estimatedFare, setEstimatedFare] = useState<number | null>(null);
+    const [isCalculatingFare, setIsCalculatingFare] = useState(false);
+    const [fareError, setFareError] = useState('');
+
+    // Debounce effect for fare calculation
+    useEffect(() => {
+        // Only calculate if both fields are reasonably filled and fareConfig is loaded
+        if (location.trim().length > 3 && destination.trim().length > 3 && fareConfig) {
+            const handler = setTimeout(() => {
+                const calculateFare = async () => {
+                    setIsCalculatingFare(true);
+                    setFareError('');
+                    setEstimatedFare(null);
+
+                    const estimate = await getRideEstimate(location, destination);
+
+                    if (estimate) {
+                        const { distance, duration } = estimate;
+                        const calculatedFare = fareConfig.baseFare + (distance * fareConfig.ratePerKm) + (duration * fareConfig.ratePerMinute);
+                        // Round to nearest 50 for a cleaner look
+                        setEstimatedFare(Math.round(calculatedFare / 50) * 50);
+                    } else {
+                        setFareError('Could not calculate a fare. Please enter more specific locations.');
+                    }
+                    setIsCalculatingFare(false);
+                };
+                calculateFare();
+            }, 750); // 750ms debounce delay
+
+            return () => {
+                clearTimeout(handler);
+            };
+        } else {
+            // Reset if inputs are cleared or too short
+            setEstimatedFare(null);
+            setFareError('');
+            setIsCalculatingFare(false);
+        }
+    }, [location, destination, fareConfig]);
+
 
     const handleGetLocation = () => {
         if (!navigator.geolocation) {
@@ -101,7 +181,20 @@ const RideRequestForm: React.FC<{ onSubmit: (location: string, destination: stri
                         required
                     />
                 </div>
-                <Button type="submit" className="w-full" disabled={isSubmitting}>
+
+                {!fareConfig && (
+                    <div className="text-center p-3 bg-slate-700/50 rounded-lg text-slate-400 text-sm">
+                        Loading fare information...
+                    </div>
+                )}
+                
+                <FareEstimate 
+                    isCalculating={isCalculatingFare}
+                    error={fareError}
+                    fare={estimatedFare}
+                />
+
+                <Button type="submit" className="w-full" disabled={isSubmitting || !fareConfig}>
                     {isSubmitting ? <Spinner/> : 'Broadcast Ride Request'}
                 </Button>
             </form>
@@ -245,7 +338,7 @@ const ActiveRequestView: React.FC<{ request: RideRequest }> = ({ request }) => {
 
 const PassengerDashboard: React.FC = () => {
     const { state } = useAppContext();
-    const { user } = state;
+    const { user, fareConfig } = state;
     const [myActiveRequest, setMyActiveRequest] = useState<RideRequest | null>(null);
     const [bidsForAcceptedRequest, setBidsForAcceptedRequest] = useState<Bid[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -322,7 +415,11 @@ const PassengerDashboard: React.FC = () => {
     return (
         <div className="max-w-2xl mx-auto">
             {!myActiveRequest ? (
-                <RideRequestForm onSubmit={handleRequestSubmit} isSubmitting={isSubmitting} />
+                <RideRequestForm 
+                    onSubmit={handleRequestSubmit} 
+                    isSubmitting={isSubmitting}
+                    fareConfig={fareConfig}
+                />
             ) : (
                 <ActiveRequestView request={myActiveRequest} />
             )}
