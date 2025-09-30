@@ -22,6 +22,11 @@ export interface User {
   isVerified: boolean;
   carDetails?: CarDetails;
   licenseUrl?: string;
+  isAvailable?: boolean; // New field for driver availability
+  rating?: {
+    average: number;
+    count: number;
+  };
 }
 
 export interface RideRequest {
@@ -32,6 +37,7 @@ export interface RideRequest {
   timestamp: FieldValue;
   status: 'PENDING' | 'ACCEPTED' | 'COMPLETED' | 'CANCELLED';
   acceptedBidId?: string;
+  acceptedBid?: Bid; // Denormalized accepted bid for easier lookup
   // Bids and messages are now sub-collections in Firestore
 }
 
@@ -54,4 +60,14 @@ export interface FareConfig {
   baseFare: number;
   ratePerKm: number;
   ratePerMinute: number;
+}
+
+export interface Rating {
+  id: string;
+  rideRequestId: string;
+  passengerId: string;
+  driverId: string;
+  rating: number;
+  review?: string;
+  timestamp: FieldValue;
 }

@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../hooks/useAppContext';
-import { RideRequest, Bid, FareConfig } from '../../types';
+import { RideRequest, Bid, FareConfig, User } from '../../types';
 import Button from '../shared/Button';
 import ChatView from '../shared/ChatView';
-import { LocationMarkerIcon, CheckBadgeIcon } from '../../constants';
+import { LocationMarkerIcon, CheckBadgeIcon, StarIcon } from '../../constants';
 import Spinner from '../shared/Spinner';
 import { 
     createRideRequest, 
     getActiveRideRequestForPassenger, 
     listenForBids, 
     acceptBid,
-    cancelRideRequest 
+    cancelRideRequest,
+    getRideToRateForPassenger,
+    submitRating
 } from '../../services/firebaseService';
 import { getRideEstimate } from '../../services/api';
 
@@ -304,6 +306,12 @@ const ActiveRequestView: React.FC<{ request: RideRequest }> = ({ request }) => {
                                             <div className="flex items-center space-x-2">
                                                 <p className="font-semibold">{bid.driver.name}</p>
                                                 {bid.driver.isVerified && <CheckBadgeIcon className="w-5 h-5 text-sky-400" title="Verified Driver" />}
+                                                {bid.driver.rating && bid.driver.rating.count > 0 && (
+                                                    <div className="flex items-center space-x-1 text-xs text-amber-400">
+                                                        <StarIcon className="w-4 h-4" />
+                                                        <span>{bid.driver.rating.average.toFixed(1)}</span>
+                                                    </div>
+                                                )}
                                             </div>
                                             {bid.driver.carDetails ? (
                                                 <p className="text-xs text-slate-400">
@@ -335,6 +343,81 @@ const ActiveRequestView: React.FC<{ request: RideRequest }> = ({ request }) => {
     );
 };
 
+const RatingForm: React.FC<{ ride: RideRequest; driver: User; onComplete: () => void }> = ({ ride, driver, onComplete }) => {
+    const { state } = useAppContext();
+    const { user: passenger } = state;
+    const [rating, setRating] = useState(0);
+    const [hoverRating, setHoverRating] = useState(0);
+    const [review, setReview] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (rating === 0) {
+            setError('Please select a star rating.');
+            return;
+        }
+        if (!passenger?.id || !driver?.id) return;
+        
+        setIsSubmitting(true);
+        setError('');
+        try {
+            await submitRating(driver.id, ride.id, passenger.id, rating, review);
+            onComplete();
+        } catch (err) {
+            console.error("Failed to submit rating:", err);
+            setError('Could not submit your rating. Please try again.');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="bg-slate-800 rounded-lg p-6 shadow-lg">
+            <h2 className="text-2xl font-bold mb-2 text-sky-400">Rate your ride with {driver.name}</h2>
+            <p className="text-slate-400 mb-6 text-sm">Trip from {ride.location} to {ride.destination}</p>
+            
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">Your Rating</label>
+                    <div className="flex items-center space-x-1">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                            <StarIcon
+                                key={star}
+                                className={`w-8 h-8 cursor-pointer transition-colors ${
+                                    (hoverRating || rating) >= star ? 'text-amber-400' : 'text-slate-600'
+                                }`}
+                                onClick={() => setRating(star)}
+                                onMouseEnter={() => setHoverRating(star)}
+                                onMouseLeave={() => setHoverRating(0)}
+                            />
+                        ))}
+                    </div>
+                </div>
+
+                <div>
+                    <label htmlFor="review" className="block text-sm font-medium text-slate-300 mb-1">
+                        Add a review (optional)
+                    </label>
+                    <textarea
+                        id="review"
+                        value={review}
+                        onChange={(e) => setReview(e.target.value)}
+                        rows={3}
+                        placeholder={`How was your trip? Praising ${driver.name} or leaving tips can help other riders.`}
+                        className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white placeholder-slate-400 focus:ring-sky-500 focus:border-sky-500"
+                    />
+                </div>
+                 {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                    {isSubmitting ? <Spinner /> : 'Submit Rating'}
+                </Button>
+            </form>
+        </div>
+    );
+};
+
 
 const PassengerDashboard: React.FC = () => {
     const { state } = useAppContext();
@@ -343,16 +426,26 @@ const PassengerDashboard: React.FC = () => {
     const [bidsForAcceptedRequest, setBidsForAcceptedRequest] = useState<Bid[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [rideToRate, setRideToRate] = useState<RideRequest | null>(null);
+    const [driverToRate, setDriverToRate] = useState<User | null>(null);
 
     useEffect(() => {
-        if (!user) return;
+        if (!user || !user.id) return;
 
-        const unsubscribe = getActiveRideRequestForPassenger(user.id!, (request) => {
+        const unsubscribeActive = getActiveRideRequestForPassenger(user.id, (request) => {
             setMyActiveRequest(request);
             setIsLoading(false);
         });
 
-        return () => unsubscribe();
+        const unsubscribeRidesToRate = getRideToRateForPassenger(user.id, (ride, driver) => {
+            setRideToRate(ride);
+            setDriverToRate(driver);
+        });
+
+        return () => {
+            unsubscribeActive();
+            unsubscribeRidesToRate();
+        };
     }, [user]);
 
      useEffect(() => {
@@ -377,6 +470,21 @@ const PassengerDashboard: React.FC = () => {
 
     if (isLoading) {
         return <div className="text-center mt-8"><Spinner className="w-8 h-8"/></div>;
+    }
+
+    if (rideToRate && driverToRate) {
+        return (
+            <div className="max-w-2xl mx-auto">
+                <RatingForm 
+                    ride={rideToRate}
+                    driver={driverToRate}
+                    onComplete={() => {
+                        setRideToRate(null);
+                        setDriverToRate(null);
+                    }}
+                />
+            </div>
+        );
     }
 
     if (myActiveRequest?.status === 'ACCEPTED') {

@@ -4,13 +4,15 @@ import { RideRequest, Bid, CarDetails, User } from '../../types';
 import Button from '../shared/Button';
 import ChatView from '../shared/ChatView';
 import Spinner from '../shared/Spinner';
-import { CheckBadgeIcon, LocationMarkerIcon, CarIcon, ShieldCheckIcon } from '../../constants';
+import { CheckBadgeIcon, LocationMarkerIcon, CarIcon, ShieldCheckIcon, StarIcon } from '../../constants';
 import { 
     listenForAvailableRequests, 
     addBidToRequest,
     getAcceptedRideForDriver,
     updateDriverProfile,
-    uploadFile
+    uploadFile,
+    updateDriverAvailability,
+    completeRide
 } from '../../services/firebaseService';
 
 const PendingVerification: React.FC = () => (
@@ -70,7 +72,8 @@ const DriverProfileSetup: React.FC<{ user: User }> = ({ user }) => {
         e.preventDefault();
         if (!user.id) return;
         
-        const allFieldsFilled = Object.values(carDetails).every(field => field.trim() !== '');
+        // FIX: Added a type guard `typeof field === 'string'` to ensure the `field` variable is a string before calling `.trim()`. This resolves the TypeScript error "Property 'trim' does not exist on type 'unknown'" which can occur if the compiler isn't certain about the types of values returned by `Object.values`.
+        const allFieldsFilled = Object.values(carDetails).every(field => typeof field === 'string' && field.trim() !== '');
         
         // FIX: License is always required. Photo is only required if one doesn't already exist from Google Sign-In.
         if (!allFieldsFilled || (!photoFile && !user.avatarUrl) || !licenseFile) {
@@ -246,17 +249,27 @@ const DriverDashboard: React.FC = () => {
     const [isBidding, setIsBidding] = useState(false);
 
     useEffect(() => {
-        if (!user || !user.isVerified) {
-             setIsLoading(false);
-             return;
-        };
-
-        const unsubscribeAvailable = listenForAvailableRequests(user.id!, (requests) => {
-            setAvailableRequests(requests);
+        if (!user || !user.isVerified || !user.id) {
             setIsLoading(false);
-        });
+            return;
+        }
 
-        const unsubscribeAccepted = getAcceptedRideForDriver(user.id!, (ride) => {
+        let unsubscribeAvailable = () => {};
+
+        // Only listen for new requests if the driver has toggled themselves as available
+        if (user.isAvailable) {
+            setIsLoading(true);
+            unsubscribeAvailable = listenForAvailableRequests(user.id, (requests) => {
+                setAvailableRequests(requests);
+                setIsLoading(false);
+            });
+        } else {
+            setAvailableRequests([]); // Clear requests when not available
+            setIsLoading(false);
+        }
+
+        // The accepted ride listener should always be active
+        const unsubscribeAccepted = getAcceptedRideForDriver(user.id, (ride) => {
             setMyAcceptedRide(ride);
         });
 
@@ -264,9 +277,21 @@ const DriverDashboard: React.FC = () => {
             unsubscribeAvailable();
             unsubscribeAccepted();
         };
-    }, [user]);
+    }, [user]); // The user object from context holds all relevant state, including isAvailable
     
     if (!user) return null;
+
+     const handleAvailabilityChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!user || !user.id) return;
+        const newAvailability = e.target.checked;
+        try {
+            await updateDriverAvailability(user.id, newAvailability);
+            // The UI will update automatically via the AppContext listener.
+        } catch (error) {
+            console.error("Failed to update availability:", error);
+            // Optionally show an error toast to the user
+        }
+    };
     
     // Flow: 1. Complete profile -> 2. Wait for verification -> 3. See dashboard
     if (!user.carDetails || !user.licenseUrl) {
@@ -278,11 +303,24 @@ const DriverDashboard: React.FC = () => {
     }
 
     if (myAcceptedRide) {
+        const handleCompleteRide = async () => {
+            if (window.confirm("Are you sure you want to mark this ride as complete? This will end the chat and allow the passenger to rate you.")) {
+                try {
+                    await completeRide(myAcceptedRide.id);
+                } catch (error) {
+                    console.error("Failed to complete ride:", error);
+                }
+            }
+        };
+
         return (
             <div className="max-w-2xl mx-auto">
-                 <div className="bg-slate-800 rounded-lg p-4 mb-4 text-center shadow-lg">
-                    <h2 className="text-xl font-bold text-emerald-400">Ride Accepted!</h2>
-                    <p className="text-slate-300">Please proceed to pick up <span className="font-semibold">{myAcceptedRide.passenger.name}</span> at <span className="font-semibold">{myAcceptedRide.location}</span>.</p>
+                 <div className="bg-slate-800 rounded-lg p-6 mb-4 text-center shadow-lg">
+                    <h2 className="text-xl font-bold text-emerald-400">Ride in Progress!</h2>
+                    <p className="text-slate-300 mt-2">Pick up <span className="font-semibold">{myAcceptedRide.passenger.name}</span> at <span className="font-semibold">{myAcceptedRide.location}</span>.</p>
+                     <Button onClick={handleCompleteRide} className="mt-4 bg-emerald-600 hover:bg-emerald-700">
+                        Mark as Complete
+                    </Button>
                 </div>
                 <ChatView rideRequestId={myAcceptedRide.id} recipient={myAcceptedRide.passenger} />
             </div>
@@ -305,13 +343,46 @@ const DriverDashboard: React.FC = () => {
 
     return (
         <div className="max-w-4xl mx-auto">
-            <h2 className="text-3xl font-bold mb-6 text-sky-400">Available Ride Requests</h2>
+             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6 gap-4">
+                <div>
+                    <h2 className="text-3xl font-bold text-sky-400">Ride Requests</h2>
+                     {user.rating && user.rating.count > 0 ? (
+                        <div className="flex items-center space-x-1.5 mt-1 text-amber-400">
+                            <StarIcon className="w-5 h-5"/>
+                            <span className="font-bold text-lg">{user.rating.average.toFixed(1)}</span>
+                            <span className="text-sm text-slate-400">({user.rating.count} ratings)</span>
+                        </div>
+                    ) : (
+                        <p className="text-sm text-slate-400 mt-1">No ratings yet.</p>
+                    )}
+                </div>
+                <div className="flex items-center space-x-3 self-end sm:self-center">
+                    <span className={`font-semibold transition-colors ${user.isAvailable ? 'text-emerald-400' : 'text-slate-400'}`}>
+                        {user.isAvailable ? 'Online' : 'Offline'}
+                    </span>
+                    <label htmlFor="availability-toggle" className="relative inline-flex items-center cursor-pointer">
+                        <input
+                            type="checkbox"
+                            id="availability-toggle"
+                            className="sr-only peer"
+                            checked={!!user.isAvailable}
+                            onChange={handleAvailabilityChange}
+                        />
+                        <div className="w-11 h-6 bg-slate-600 rounded-full peer peer-focus:ring-2 peer-focus:ring-sky-500/50 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                    </label>
+                </div>
+            </div>
             {isLoading ? (
                  <div className="text-center py-16 bg-slate-800 rounded-lg">
                     <div className="flex justify-center items-center space-x-3">
                         <Spinner />
                         <p className="text-slate-400">Checking for new requests...</p>
                     </div>
+                </div>
+            ) : !user.isAvailable ? (
+                <div className="text-center py-16 bg-slate-800 rounded-lg">
+                    <p className="text-slate-400 font-semibold">You are currently offline.</p>
+                    <p className="text-slate-500 text-sm mt-2">Toggle the switch above to go online and see ride requests.</p>
                 </div>
             ) : availableRequests.length === 0 ? (
                  <div className="text-center py-16 bg-slate-800 rounded-lg">

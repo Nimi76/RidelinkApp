@@ -7,6 +7,7 @@ import {
 import { 
     doc,
     getDoc,
+    getDocs,
     setDoc,
     addDoc,
     updateDoc,
@@ -18,6 +19,7 @@ import {
     orderBy,
     limit,
     deleteDoc,
+    runTransaction,
 } from "firebase/firestore";
 import { 
     ref,
@@ -71,13 +73,20 @@ export const createUserProfile = async (firebaseUser: FirebaseUser, role: UserRo
     const userSnap = await getDoc(userRef);
     const existingData = userSnap.exists() ? userSnap.data() : {};
 
-    const userData = {
+    const userData: Partial<User> = { // Use Partial<User> to handle different user types
         name: firebaseUser.displayName || existingData.name || 'Anonymous Admin',
         email: firebaseUser.email || '',
         avatarUrl: firebaseUser.photoURL || existingData.avatarUrl || `https://ui-avatars.com/api/?name=${(firebaseUser.displayName || 'Admin').replace(' ','+')}&background=0ea5e9&color=fff`,
         role: actualRole,
         isVerified: isUserAdmin, // Admins are always verified
     };
+
+    // Add driver-specific fields only for brand new driver accounts
+    if (actualRole === UserRole.DRIVER && !userSnap.exists()) {
+        userData.isAvailable = false;
+        userData.rating = { average: 0, count: 0 };
+    }
+
 
     // Use setDoc with merge to create or update. This is crucial.
     // It prevents overwriting fields like carDetails if an admin was previously a driver
@@ -108,6 +117,12 @@ export const updateDriverVerification = (uid: string, isVerified: boolean): Prom
 export const updateDriverProfile = (uid: string, data: { carDetails: CarDetails, avatarUrl: string, licenseUrl: string }): Promise<void> => {
     const userRef = doc(db, "users", uid);
     return updateDoc(userRef, data);
+};
+
+export const updateDriverAvailability = (uid: string, isAvailable: boolean): Promise<void> => {
+    const userRef = doc(db, "users", uid);
+    logEvent(analytics, 'driver_availability_toggled', { driver_id: uid, is_available: isAvailable });
+    return updateDoc(userRef, { isAvailable });
 };
 
 
@@ -207,7 +222,8 @@ export const addBidToRequest = async (requestId: string, driver: User, amount: n
             email: driver.email,
             role: UserRole.DRIVER,
             isVerified: driver.isVerified,
-            carDetails: driver.carDetails
+            carDetails: driver.carDetails,
+            rating: driver.rating,
         },
         amount,
         driverLocation,
@@ -270,6 +286,87 @@ export const listenForMessages = (requestId: string, callback: (messages: Messag
             messages.push({ id: doc.id, ...doc.data() } as Message);
         });
         callback(messages);
+    });
+};
+
+// --- Rating System ---
+
+export const completeRide = (requestId: string): Promise<void> => {
+    const requestRef = doc(db, "rideRequests", requestId);
+    logEvent(analytics, 'ride_completed', { request_id: requestId });
+    return updateDoc(requestRef, { status: 'COMPLETED' });
+};
+
+export const submitRating = async (driverId: string, rideRequestId: string, passengerId: string, rating: number, review: string): Promise<void> => {
+    const driverRef = doc(db, "users", driverId);
+    const ratingCol = collection(db, "ratings");
+
+    await runTransaction(db, async (transaction) => {
+        const driverDoc = await transaction.get(driverRef);
+        if (!driverDoc.exists()) {
+            throw "Driver does not exist!";
+        }
+
+        const currentData = driverDoc.data() as User;
+        const currentRating = currentData.rating || { average: 0, count: 0 };
+
+        const newCount = currentRating.count + 1;
+        const newAverage = ((currentRating.average * currentRating.count) + rating) / newCount;
+
+        transaction.update(driverRef, {
+            rating: {
+                average: newAverage,
+                count: newCount
+            }
+        });
+        
+        const newRatingRef = doc(ratingCol);
+        transaction.set(newRatingRef, {
+            driverId,
+            rideRequestId,
+            passengerId,
+            rating,
+            review,
+            timestamp: serverTimestamp(),
+        });
+    });
+
+    logEvent(analytics, 'rating_submitted', { rating, has_review: review.length > 0 });
+};
+
+export const getRideToRateForPassenger = (passengerId: string, callback: (request: RideRequest | null, driver: User | null) => void) => {
+    const rideQuery = query(
+        collection(db, "rideRequests"),
+        where("passenger.id", "==", passengerId),
+        where("status", "==", "COMPLETED"),
+        orderBy("timestamp", "desc"),
+        limit(1)
+    );
+
+    return onSnapshot(rideQuery, (rideSnapshot) => {
+        if (rideSnapshot.empty) {
+            callback(null, null);
+            return;
+        }
+
+        const rideDoc = rideSnapshot.docs[0];
+        const rideData = { id: rideDoc.id, ...rideDoc.data() } as RideRequest;
+        
+        const driver = rideData.acceptedBid?.driver ?? null;
+
+        const ratingQuery = query(
+            collection(db, "ratings"),
+            where("rideRequestId", "==", rideData.id),
+            limit(1)
+        );
+
+        getDocs(ratingQuery).then(ratingSnapshot => {
+            if (ratingSnapshot.empty) {
+                callback(rideData, driver);
+            } else {
+                callback(null, null);
+            }
+        });
     });
 };
 
